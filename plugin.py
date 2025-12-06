@@ -91,7 +91,8 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         await super().on_load()
 
     async def on_close(self) -> None:
-        await self.pixiv_api.shutdown()
+        if self.init:
+            await self.pixiv_api.shutdown()
         await super().on_close()
 
     @group_filter
