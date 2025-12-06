@@ -12,10 +12,6 @@ from tqdm import tqdm
 import natsort
 from PIL import Image
 from pixivpy_async import *
-try:
-    from .setup_logger import get_logger
-except ImportError:
-    from setup_logger import get_logger
 
 
 @dataclass
@@ -106,6 +102,10 @@ class BetterPixiv:
         self.storge_path: Path = Path(os.path.curdir)
         self._token_refresh_lock = asyncio.Lock()
         if not logger:
+            try:
+                from .setup_logger import get_logger
+            except ImportError:
+                from setup_logger import get_logger
             self.logger = get_logger('pixiv')
         else:
             self.logger = logger
@@ -514,37 +514,3 @@ class BetterPixiv:
                                                      min_bookmarks=min_marks,
                                                      offset=offset)
         return search_result
-
-
-if __name__ == '__main__':
-    async def test():
-        api = BetterPixiv(proxy='http://127.0.0.1:10809')
-        await api.api_login(refresh_token='a4TF-gC5kRkciAiZ5MhGUoVw6zb3AXO1M1DmnAeFGlk')
-        api.set_storge_path(Path('temp_dl'))
-        for _ in range(10):
-            if await api.download_ugoira(107146721):
-                break
-            print(f'retry {_ + 1}')
-        print('done')
-        await api.shutdown()
-
-
-    async def test2():
-        api = BetterPixiv(proxy='http://127.0.0.1:10809')
-        await api.api_login(refresh_token='a4TF-gC5kRkciAiZ5MhGUoVw6zb3AXO1M1DmnAeFGlk')
-        api.set_storge_path(Path('temp_dl'))
-        print(await api.download([138232292, 115081727]))
-        print('done')
-        await api.shutdown()
-
-
-    async def get_works():
-        api = BetterPixiv(proxy='http://127.0.0.1:10809')
-        await api.api_login(refresh_token='a4TF-gC5kRkciAiZ5MhGUoVw6zb3AXO1M1DmnAeFGlk')
-        with open('my_fav.json', 'w', encoding='utf-8') as f:
-            json.dump(await api.get_favs(), f, ensure_ascii=False)
-        await api.shutdown()
-
-
-    loop = asyncio.new_event_loop()
-    loop.run_until_complete(test())
