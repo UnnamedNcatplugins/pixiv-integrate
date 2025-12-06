@@ -5,7 +5,7 @@ from ncatbot.utils import get_log
 from ncatbot.core.event import GroupMessageEvent
 from dataclasses import dataclass, fields, is_dataclass, field, MISSING
 from typing import Optional
-from .better_pixiv import BetterPixiv
+from .better_pixiv import BetterPixiv, Tag
 from pathlib import Path
 
 PLUGIN_NAME = 'UnnamedPixivIntegrate'
@@ -101,7 +101,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
 
     @group_filter
     @filter_registry.filters('group_filter')
-    @command_registry.command('pixiv', description='根据id获取对应illust')
+    @command_registry.command('pixiv', aliases=['p'], description='根据id获取对应illust')
     @param(name='work_id', help='作品id', default=-1)
     async def get_illust_work(self, event: GroupMessageEvent, work_id: int = -1):
         if not self.init:
@@ -126,3 +126,20 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             await self.api.send_group_image(group_id, str(path))
             await asyncio.sleep(1)
         await event.reply(f'发送完成')
+
+    @group_filter
+    @filter_registry.filters('group_filter')
+    @command_registry.command('pixiv_info', aliases=['pi'], description='根据id获取对应illust info')
+    @param(name='work_id', help='作品id', default=-1)
+    async def get_illust_info(self, event: GroupMessageEvent, work_id: int = -1):
+        if not self.init:
+            await event.reply(f'未配置refresh_token, 联系管理员进行配置后重启尝试')
+            return
+        if work_id == -1:
+            await event.reply(f'未输入作品id,重试')
+            return
+        work_details = await self.pixiv_api.get_work_details(work_id)
+
+        def plain_tags(tags: list[Tag]):
+            return [tag.name for tag in tags]
+        await event.reply(f'\n{work_details.title=}\n{work_details.create_date=}\n{work_details.user.name=}\n{work_details.user.id=}\n{plain_tags(work_details.tags)=}')
