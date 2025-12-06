@@ -2,3 +2,4 @@ pixivpy-async
 pillow
 tqdm
 natsort
+colorlog

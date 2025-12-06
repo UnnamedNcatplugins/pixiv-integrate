@@ -3,12 +3,14 @@ from ncatbot.plugin_system import NcatBotPlugin, command_registry, group_filter,
 from ncatbot.plugin_system.builtin_plugin.unified_registry.filter_system import filter_registry
 from ncatbot.utils import get_log
 from ncatbot.core.event import GroupMessageEvent
-from dataclasses import dataclass, fields, asdict, is_dataclass, field, MISSING
+from dataclasses import dataclass, fields, is_dataclass, field, MISSING
 from typing import Optional
 from .better_pixiv import BetterPixiv
 from pathlib import Path
 
-logger = get_log("UnnamedPixivIntegrate")
+PLUGIN_NAME = 'UnnamedPixivIntegrate'
+
+logger = get_log(PLUGIN_NAME)
 enable_group_filter = False
 filter_groups = []
 
@@ -45,19 +47,6 @@ def bind_config[T](plugin: NcatBotPlugin, config_class: type[T]) -> T:
     return config_class(**loaded_data)
 
 
-# noinspection PyDataclass,PyTypeChecker
-def sync_config[T](plugin: NcatBotPlugin, config_instance: T) -> None:
-    """
-    将 Dataclass 的当前值反向同步回 plugin.config。
-    用于运行时修改配置并持久化。
-    """
-    if not is_dataclass(config_instance):
-        return
-    current_data = asdict(config_instance)
-    for key, value in current_data.items():
-        plugin.config[key] = value
-
-
 @dataclass
 class PixivConfig:
     refresh_token: str = field(default='')
@@ -75,7 +64,7 @@ def filter_group_by_config(event: GroupMessageEvent) -> bool:
 
 
 class UnnamedPixivIntegrate(NcatBotPlugin):
-    name = "UnnamedPixivIntegrate"  # 必须，插件名称，要求全局独立
+    name = PLUGIN_NAME  # 必须，插件名称，要求全局独立
     version = "0.0.1"  # 必须，插件版本
     dependencies = {}  # 必须，依赖的其他插件和版本
     description = "集成pixiv功能"  # 可选
