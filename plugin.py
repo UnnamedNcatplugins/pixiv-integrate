@@ -35,7 +35,7 @@ def bind_config[T](plugin: NcatBotPlugin, config_class: type[T]) -> T:
             default_val = None
         # 注册到 NcatBot
         # 如果 data/xxx.yaml 中已经有值，NcatBot 会忽略这个 default_val
-        plugin.register_config(reg_field.name, default_val)
+        plugin.register_config(reg_field.name, default_val, value_type=type(default_val))
     # 2. 从 plugin.config 读取最终值 (YAML > 默认值)
     loaded_data = {}
     for reg_field in fields(config_class):
