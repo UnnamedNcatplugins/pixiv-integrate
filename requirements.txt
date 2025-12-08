@@ -3,3 +3,4 @@ pillow
 tqdm
 natsort
 colorlog
+sqlmodel

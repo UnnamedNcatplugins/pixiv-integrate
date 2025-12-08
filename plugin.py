@@ -1,13 +1,16 @@
 import asyncio
+import enum
+
 from ncatbot.plugin_system import NcatBotPlugin, command_registry, group_filter, param
 from ncatbot.plugin_system.builtin_plugin.unified_registry.filter_system import filter_registry
 from ncatbot.utils import get_log
 from ncatbot.core.event import GroupMessageEvent
-from dataclasses import dataclass, fields, is_dataclass, field, MISSING
+from dataclasses import dataclass, field
+from .config_proxy import ProxiedPluginConfig
 from typing import Optional
 from .better_pixiv import BetterPixiv, Tag
 from pathlib import Path
-import json
+from .pixiv_db import PixivDB
 
 PLUGIN_NAME = 'UnnamedPixivIntegrate'
 
@@ -16,53 +19,30 @@ enable_group_filter = False
 filter_groups = []
 
 
-# noinspection PyDataclass,PyArgumentList
-def bind_config[T](plugin: NcatBotPlugin, config_class: type[T]) -> T:
-    """
-    将 Dataclass 绑定到 NcatBot 的配置系统 (Python 3.12+ PEP 695 版本)。
-    """
-    if not is_dataclass(config_class):
-        raise TypeError("config_class must be a dataclass")
-    # 1. 自动注册配置项
-    for reg_field in fields(config_class):
-        # === 修复核心：使用 MISSING 哨兵值进行判断 ===
-        # 情况 A: 字段定义了 default (例如: a: int = 1)
-        if reg_field.default is not MISSING:
-            default_val = reg_field.default
-        # 情况 B: 字段定义了 default_factory (例如: b: list = field(default_factory=list))
-        elif reg_field.default_factory is not MISSING:
-            default_val = reg_field.default_factory()
-        # 情况 C: 没有默认值 (在配置系统中通常设为 None 或报错，这里给 None 方便注册)
-        else:
-            default_val = None
-        # 注册到 NcatBot
-        # 如果 data/xxx.yaml 中已经有值，NcatBot 会忽略这个 default_val
-        plugin.register_config(reg_field.name, default_val, value_type=type(default_val))
-    # 2. 从 plugin.config 读取最终值 (YAML > 默认值)
-    loaded_data = {}
-    for reg_field in fields(config_class):
-        if reg_field.name in plugin.config:
-            loaded_data[reg_field.name] = plugin.config[reg_field.name]
-    # 3. 实例化 Dataclass
-    return config_class(**loaded_data)
-
-
-# noinspection PyDataclass,PyArgumentList
-def sync_config[T](plugin: NcatBotPlugin, config_class: type[T]):
-    if not is_dataclass(config_class):
-        raise TypeError("config_class must be a dataclass")
-    for reg_field in fields(config_class):
-        plugin.config[reg_field.name] = getattr(config_class, reg_field.name)
+class IllustSourceType(enum.Enum):
+    user = 0
 
 
 @dataclass
-class PixivConfig:
+class IllustSource(ProxiedPluginConfig):
+    source_type: IllustSourceType = field(default=IllustSourceType.user)
+    source_content: str = field(default='')
+
+
+@dataclass
+class DailyIllustConfig(ProxiedPluginConfig):
+    enable: bool = field(default=False)
+    source: IllustSource = field(default_factory=IllustSource)
+
+
+@dataclass
+class PixivConfig(ProxiedPluginConfig):
     refresh_token: str = field(default='')
     proxy_server: str = field(default='')
     max_single_work_cnt: int = field(default=20)
     enable_group_filter: bool = field(default=False)
     filter_group: list[int] = field(default_factory=list)
-    daily_illust_source: str = field(default='')
+    daily_illust_config: DailyIllustConfig = field(default_factory=DailyIllustConfig)
 
 
 @filter_registry.register('group_filter')
@@ -84,7 +64,8 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
     pixiv_config: Optional[PixivConfig] = None
 
     async def on_load(self) -> None:
-        self.pixiv_config = bind_config(self, PixivConfig)
+        self.pixiv_config = PixivConfig(self)
+
         if self.pixiv_config.refresh_token:
             logger.info(f'正在使用token: {self.pixiv_config.refresh_token}')
             self.init = True
@@ -106,20 +87,30 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         if self.pixiv_config.enable_group_filter:
             init_group_filter()
 
+        # noinspection PyUnreachableCode
         async def init_daily_illust():
-            logger.info('检测到每日涩图功能已配置')
+            logger.info('检测到每日插画功能已配置')
             # 目前只实现收藏拉取功能
-            if not self.pixiv_config.daily_illust_source.isdigit():
-                logger.warning(f'每日涩图源配置无效: {self.pixiv_config.daily_illust_source} 无法启用')
-                return
-            source_id = int(self.pixiv_config.daily_illust_source)
-            test_source_list = await self.pixiv_api.get_favs(source_id, max_page_cnt=1)
-            if not test_source_list:
-                logger.warning(f'测试拉取每日涩图源时出错, 无法启用')
-                return
-            logger.info(f'通过所有校验, 但功能没写完, 还是不启用')
+            if self.pixiv_config.daily_illust_config.source.source_type == IllustSourceType.user.value:
+                source_content = self.pixiv_config.daily_illust_config.source.source_content
+                if not source_content:
+                    logger.error(f'未配置源, 无法启用')
+                    return
+                if not source_content.isdigit():
+                    logger.error(f'插画源配置无效: {source_content} 需为数字')
+                    return
+                source_id = int(source_content)
+                test_source_list = await self.pixiv_api.get_favs(source_id, max_page_cnt=1)
+                if not test_source_list:
+                    logger.error(f'测试拉取每日插画源时出错, 无法启用')
+                    return
+                logger.info(f'初始化pixiv数据库')
+                db_url = self.workspace / Path('pixiv.db')
+                self.pixiv_db = PixivDB(f'sqlite:///{str(db_url)}')
+            else:
+                logger.error(f'每日插画源配置无效: {self.pixiv_config.daily_illust_config} 无法启用')
 
-        if self.pixiv_config.daily_illust_source:
+        if self.pixiv_config.daily_illust_config.enable:
             await init_daily_illust()
 
         await super().on_load()
