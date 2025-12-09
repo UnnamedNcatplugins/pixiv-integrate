@@ -1,8 +1,8 @@
 import enum
-from ncatbot.plugin_system import NcatBotPlugin, command_registry, group_filter, param, admin_filter
+from ncatbot.plugin_system import NcatBotPlugin, command_registry, param, admin_filter
 from ncatbot.plugin_system.builtin_plugin.unified_registry.filter_system import filter_registry
 from ncatbot.utils import get_log
-from ncatbot.core.event import GroupMessageEvent
+from ncatbot.core.event import BaseMessageEvent, GroupMessageEvent
 from dataclasses import dataclass, field
 from .config_proxy import ProxiedPluginConfig
 from typing import Optional
@@ -45,7 +45,10 @@ class PixivConfig(ProxiedPluginConfig):
 
 
 @filter_registry.register('group_filter')
-def filter_group_by_config(event: GroupMessageEvent) -> bool:
+def filter_group_by_config(event: BaseMessageEvent) -> bool:
+    if not event.is_group_event():
+        return False
+    assert isinstance(event, GroupMessageEvent)
     if enable_group_filter:
         return int(event.group_id) in filter_groups
     return True
@@ -137,7 +140,6 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             logger.error(f'每日插画源配置无效: {self.pixiv_config.daily_illust_config.source} 无法更新')
         logger.info(f'每日插画源更新完成')
 
-    @group_filter
     @filter_registry.filters('group_filter')
     @command_registry.command('pixiv', aliases=['p'], description='根据id获取对应illust')
     @param(name='work_id', help='作品id', default=-1)
@@ -169,7 +171,6 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             await self.api.send_group_image(event.group_id, str(file_path))
         await event.reply('发送完成')
 
-    @group_filter
     @filter_registry.filters('group_filter')
     @command_registry.command('pixiv_info', aliases=['pi'], description='根据id获取对应illust info')
     @param(name='work_id', help='作品id', default=-1)
@@ -186,8 +187,8 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             return [tag.name for tag in tags]
         await event.reply(f'\n{work_details.title=}\n{work_details.create_date=}\n{work_details.user.name=}\n{work_details.user.id=}\n{plain_tags(work_details.tags)=}')
 
-    @group_filter
     @admin_filter
+    @filter_registry.filters('group_filter')
     @command_registry.command('update_illust_source', aliases=['uis'])
     async def request_update_daliy_illust(self, event: GroupMessageEvent):
         logger.info(f'收到每日插画源更新请求')
