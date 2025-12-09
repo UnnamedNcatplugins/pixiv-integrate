@@ -17,16 +17,16 @@ from tqdm import tqdm
 class User:
     id: int
     name: str
-    account: str
-    profile_image_urls: list[str]
-    is_followed: bool
-    is_accept_request: bool
+    account: Optional[str] = field(default=None)
+    profile_image_urls: Optional[list[str]] = field(default=None)
+    is_followed: Optional[bool] = field(default=None)
+    is_accept_request: Optional[bool] = field(default=None)
 
 
 @dataclass
 class Tag:
     name: str
-    translated_name: Optional[str]
+    translated_name: Optional[str] = field(default=None)
 
 
 @dataclass
@@ -59,10 +59,10 @@ class WorkDetail:
     page_count: int
     width: int
     height: int
-    meta_single_page: MetaSinglePage
-    meta_pages: list[MetaPage]  # 存储每一页的详细信息
     total_view: int
     total_bookmarks: int
+    meta_single_page: Optional[MetaSinglePage] = field(default=None)
+    meta_pages: Optional[list[MetaPage]] = field(default=None)
     sanity_level: Optional[int] = field(default=None)
     x_restrict: Optional[int] = field(default=None)
     restrict: Optional[int] = field(default=None)
@@ -76,14 +76,59 @@ class WorkDetail:
     restriction_attributes: Optional[list[str]] = field(default=None)
 
 
+def build_work_detail(work_dict: dict) -> WorkDetail:
+    meta_work_detail = WorkDetail(
+        id=work_dict['id'],
+        title=work_dict['title'],
+        type=work_dict['type'],
+        caption=work_dict['caption'],
+        user=User(
+            id=work_dict['user']['id'],
+            name=work_dict['user']['name'],
+            account=work_dict['user'].get('account', None),
+            profile_image_urls=work_dict['user'].get('profile_image_urls', None),
+            is_followed=work_dict['user'].get('is_followed', None),
+            is_accept_request=work_dict['user'].get('is_accept_request', None)
+        ),
+        tags=[
+            Tag(name=tag['name'], translated_name=tag.get('translated_name', None))
+            for tag in work_dict['tags']
+        ],
+        create_date=work_dict['create_date'],
+        page_count=work_dict['page_count'],
+        width=work_dict['width'],
+        height=work_dict['height'],
+        total_view=work_dict['total_view'],
+        total_bookmarks=work_dict['total_bookmarks'],
+        is_bookmarked=work_dict['is_bookmarked'],
+    )
+    meta_single_page: Optional[MetaSinglePage] = None
+    meta_pages: Optional[list[MetaPage]] = None
+    if 'meta_single_page' in work_dict and work_dict['meta_single_page']:
+        meta_single_page = MetaSinglePage(
+            original_image_url=work_dict['meta_single_page'].get('original_image_url')
+        )
+    if 'meta_pages' in work_dict and work_dict['meta_pages']:
+        meta_pages = [
+            MetaPage(
+                image_urls=MetaPageImageUrls(
+                    original=page['image_urls']['original']
+                )
+            )
+            for page in work_dict['meta_pages']
+        ]
+    meta_work_detail.meta_pages = meta_pages
+    meta_work_detail.meta_single_page = meta_single_page
+    return meta_work_detail
+
+
 @dataclass
 class DownloadResult:
     task_id: int
     total: int
-    success: int
-    paths: list[Path]
     extra_info: Optional[str]
-    failed_unit: list[Self | str]
+    failed_units: list[Self | str]
+    success_units: list[Self | Path]
 
 
 class PixivError(Exception):
@@ -93,7 +138,7 @@ class PixivError(Exception):
 
 
 class BetterPixiv:
-    def __init__(self, proxy=None, bypass=False, logger: Optional[logging.Logger] = None):
+    def __init__(self, proxy=None, bypass=False, logger: Optional[logging.Logger] = None, debug=False):
         self.client = PixivClient(proxy=proxy, bypass=bypass)
         self.api = AppPixivAPI(client=self.client.start(), proxy=proxy, bypass=bypass)
         self.proxy = proxy
@@ -105,7 +150,7 @@ class BetterPixiv:
                 from .setup_logger import get_logger
             except ImportError:
                 from setup_logger import get_logger
-            self.logger = get_logger('pixiv')
+            self.logger = get_logger('pixiv', debug=debug)
         else:
             self.logger = logger
 
@@ -154,7 +199,7 @@ class BetterPixiv:
         self 在 wrapper 被调用时作为第一个参数传入。
         """
         @functools.wraps(func)
-        async def wrapper(self, *args, **kwargs):
+        async def wrapper(self: Self, *args, **kwargs):
             try:
                 try:
                     # 这里的 self 是运行时传入的 BetterPixiv 实例
@@ -178,6 +223,9 @@ class BetterPixiv:
                 async with self._token_refresh_lock:
                     await self.api_login(refresh=True)
                 return await func(self, *args, **kwargs)
+            except KeyboardInterrupt:
+                await self.shutdown()
+                raise
         return wrapper
 
     async def api_login(self, refresh_token='', refresh=False) -> str:
@@ -214,13 +262,13 @@ class BetterPixiv:
     async def __download_single_file(self,
                                      sem: asyncio.Semaphore,
                                      url: str,
-                                     file_downloaded_callback: Optional[Callable[[str], None]] = None) -> Path:
+                                     file_downloaded_callback: Optional[Callable[[str, bool], None]] = None) -> Path:
         async with sem:
             for retry_times in range(10):
                 try:
-                    await self.api.download(url, path=str(self.storge_path))
+                    file_result = await self.api.download(url, path=str(self.storge_path))
                     if file_downloaded_callback:
-                        file_downloaded_callback(url)
+                        file_downloaded_callback(url, file_result)
                     break
                 except Exception as dl_e:
                     # 使用 tqdm.write 防止打断进度条
@@ -234,7 +282,7 @@ class BetterPixiv:
                                      work_details: WorkDetail,
                                      sem: asyncio.Semaphore,
                                      phase_callback: Optional[Callable[[int, str], None]] = None) -> DownloadResult:
-        download_result = DownloadResult(task_id=0, total=0, success=0, paths=[], extra_info=None, failed_unit=[])
+        download_result = DownloadResult(task_id=0, total=0, extra_info=None, failed_units=[], success_units=[])
         if work_details.type not in ("illust", "ugoira"):
             download_result.extra_info = 'work不是illust或ugoria'
             return download_result
@@ -247,9 +295,11 @@ class BetterPixiv:
                 work_url_list.append(work_details.meta_single_page.original_image_url)
             download_result.total = len(work_url_list)
 
-            def _phase_callback(single_url: str):
-                download_result.success += 1
-                download_result.paths.append(Path(self.storge_path) / Path(os.path.basename(single_url)))
+            def _phase_callback(single_url: str, task_result: bool):
+                if task_result:
+                    download_result.success_units.append(Path(self.storge_path) / Path(os.path.basename(single_url)))
+                else:
+                    download_result.failed_units.append(single_url)
                 if phase_callback:
                     phase_callback(work_details.id, single_url)
             tasks = [self.__download_single_file(sem, url, _phase_callback) for url in work_url_list]
@@ -263,7 +313,7 @@ class BetterPixiv:
             try:
                 if not zip_path.exists():
                     if not await self.__download_single_file(sem, zip_url):
-                        download_result.failed_unit.append(zip_url)
+                        download_result.failed_units.append(zip_url)
                         download_result.extra_info = f'Error in downloading {zip_url}'
                         return download_result
             except KeyboardInterrupt:
@@ -271,7 +321,7 @@ class BetterPixiv:
             except Exception as e:
                 self.logger.warning(e)
                 download_result.extra_info = str(e)
-                download_result.failed_unit.append(zip_url)
+                download_result.failed_units.append(zip_url)
                 return download_result
                 # 打开ZIP文件
             with zipfile.ZipFile(zip_path, 'r') as zip_file:
@@ -285,7 +335,7 @@ class BetterPixiv:
                         images.append(Image.open(io.BytesIO(image_data.read())))
             # 确保有图片文件
             if not images:
-                download_result.failed_unit.append(zip_url)
+                download_result.failed_units.append(zip_url)
                 download_result.extra_info = 'No images found in the ZIP file'
                 return download_result
             # 将所有图片转换为 GIF 并保存
@@ -298,8 +348,7 @@ class BetterPixiv:
                 loop=1
             )
             zip_path.unlink()
-            download_result.paths.append(gif_path)
-            download_result.success += 1
+            download_result.success_units.append(gif_path)
         return download_result
 
     async def download(self, work_ids: list[WorkDetail],
@@ -307,11 +356,12 @@ class BetterPixiv:
                        phase_callback: Optional[Callable[[int, str], None]] = None) -> DownloadResult:
         if not isinstance(work_ids, list):
             work_ids = [work_ids]
-        download_result = DownloadResult(task_id=0, total=0, success=0, paths=[], extra_info=None, failed_unit=[])
+        download_result = DownloadResult(task_id=0, total=0, extra_info=None, failed_units=[], success_units=[])
         if len(work_ids) == 0:
             return download_result
         assert isinstance(work_ids[0], WorkDetail)
         semaphore = asyncio.Semaphore(max_workers)
+        download_result.total = len(work_ids)
         self.logger.info(f'启动下载任务, 目标ID数: {len(work_ids)}, 最大并发: {max_workers}')
         pbar_works: Optional[tqdm] = None
         if phase_callback is None:
@@ -334,13 +384,12 @@ class BetterPixiv:
         task_results: list[DownloadResult] = await asyncio.gather(*tasks)
         if pbar_works:
             pbar_works.close()
-        download_result.total = len(tasks)
+
         for task_result in task_results:
-            if task_result.total > 0 and task_result.total == task_result.success:
-                download_result.success += 1  # 成功下载的作品数
+            if task_result.total > 0 and task_result.total == len(task_result.success_units):
+                download_result.success_units.append(task_result)  # 成功下载的作品数
             else:
-                download_result.failed_unit.append(task_result)
-            download_result.paths += task_result.paths
+                download_result.failed_units.append(task_result)
         return download_result
 
     @retry_on_error
@@ -353,43 +402,7 @@ class BetterPixiv:
         if work_details_json.get('error', None):
             raise PixivError(work_details_json)
         illust_detail_json = work_details_json['illust']
-        # noinspection PyArgumentList
-        return WorkDetail(
-            id=illust_detail_json['id'],
-            title=illust_detail_json['title'],
-            type=illust_detail_json['type'],
-            caption=illust_detail_json['caption'],
-            user=User(
-                id=illust_detail_json['user']['id'],
-                name=illust_detail_json['user']['name'],
-                account=illust_detail_json['user']['account'],
-                profile_image_urls=illust_detail_json['user']['profile_image_urls'],
-                is_followed=illust_detail_json['user']['is_followed'],
-                is_accept_request=illust_detail_json['user']['is_accept_request']
-            ),
-            tags=[
-                Tag(name=tag['name'], translated_name=tag.get('translated_name'))
-                for tag in illust_detail_json['tags']
-            ],
-            create_date=illust_detail_json['create_date'],
-            page_count=illust_detail_json['page_count'],
-            width=illust_detail_json['width'],
-            height=illust_detail_json['height'],
-            meta_single_page=MetaSinglePage(
-                original_image_url=illust_detail_json['meta_single_page'].get('original_image_url')
-            ),
-            meta_pages=[
-                MetaPage(
-                    image_urls=MetaPageImageUrls(
-                        original=page['image_urls']['original']
-                    )
-                )
-                for page in illust_detail_json['meta_pages']
-            ],
-            total_view=illust_detail_json['total_view'],
-            total_bookmarks=illust_detail_json['total_bookmarks'],
-            is_bookmarked=illust_detail_json['is_bookmarked'],
-        )
+        return build_work_detail(illust_detail_json)
 
     @retry_on_error
     async def get_user_works(self, user_id: int) -> list:
@@ -402,7 +415,7 @@ class BetterPixiv:
     async def get_favs(self, user_id=88725668,
                        max_page_cnt: int = 0,
                        hook_func: Optional[Callable[..., Awaitable]] = None) -> list:
-        fav_list = []
+        fav_list: list[WorkDetail] = []
         now_page = 1
         max_mark = None
         try:
@@ -414,7 +427,8 @@ class BetterPixiv:
                 self.logger.debug(f'收藏翻页中, {next_url=}')
                 index = next_url.find('max_bookmark_id=') + len('max_bookmark_id=')
                 max_mark = next_url[index:]
-                fav_list += [work['id'] for work in favs['illusts']]
+                # fav_list += [work['id'] for work in favs['illusts']]
+                fav_list += [build_work_detail(fav_work) for fav_work in favs['illusts']]
                 await asyncio.sleep(0.5)
                 if hook_func:
                     await hook_func(favs)

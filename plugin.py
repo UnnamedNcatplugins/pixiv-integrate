@@ -1,4 +1,3 @@
-import asyncio
 import enum
 from ncatbot.plugin_system import NcatBotPlugin, command_registry, group_filter, param
 from ncatbot.plugin_system.builtin_plugin.unified_registry.filter_system import filter_registry
@@ -7,7 +6,7 @@ from ncatbot.core.event import GroupMessageEvent
 from dataclasses import dataclass, field
 from .config_proxy import ProxiedPluginConfig
 from typing import Optional
-from .better_pixiv import BetterPixiv, Tag
+from .better_pixiv import BetterPixiv, Tag, DownloadResult
 from pathlib import Path
 from .pixiv_db import PixivDB
 
@@ -61,6 +60,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
     init: bool = False
     pixiv_api: Optional[BetterPixiv] = None
     pixiv_config: Optional[PixivConfig] = None
+    pixiv_db: Optional[PixivDB] = None
 
     async def on_load(self) -> None:
         self.pixiv_config = PixivConfig(self)
@@ -119,6 +119,12 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             await self.pixiv_api.shutdown()
         await super().on_close()
 
+    def update_daily_illust_source(self):
+        if self.pixiv_config.daily_illust_config.source.source_type == IllustSourceType.user.value:
+            source_content = self.pixiv_config.daily_illust_config.source.source_content
+            user_id = int(source_content)
+            user_favs = self.pixiv_api.get_favs(user_id)
+
     @group_filter
     @filter_registry.filters('group_filter')
     @command_registry.command('pixiv', aliases=['p'], description='根据id获取对应illust')
@@ -138,13 +144,14 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
                 await event.reply(f'超过单个作品数量限制({self.pixiv_config.max_single_work_cnt}),不下载')
                 return
         download_result = await self.pixiv_api.download([work_details])
-        if download_result.total != download_result.success:
+        if download_result.total != len(download_result.success_units):
             logger.error(f'{download_result}下载失败')
             await event.reply(f'下载失败')
             return
-        for path in download_result.paths:
-            await self.api.send_group_image(event.group_id, str(path))
-            await asyncio.sleep(1)
+        assert len(download_result.success_units) > 0
+        single_result: DownloadResult = download_result.success_units[0]
+        for file_path in single_result.success_units:
+            await self.api.send_group_image(event.group_id, str(file_path))
         await event.reply('发送完成')
 
     @group_filter
