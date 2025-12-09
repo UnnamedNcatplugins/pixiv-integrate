@@ -12,7 +12,7 @@ class PixivDB:
 
     def insert_daily_illust_source_rows(self, rows: list[DailyIllustSource]):
         for row in rows:
-            self.session.add(row)
+            self.session.merge(row)
         self.session.commit()
 
     def shutdown(self):
