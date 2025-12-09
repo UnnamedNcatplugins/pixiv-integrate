@@ -3,6 +3,7 @@ from ncatbot.plugin_system import NcatBotPlugin, command_registry, param, admin_
 from ncatbot.plugin_system.builtin_plugin.unified_registry.filter_system import filter_registry
 from ncatbot.utils import get_log
 from ncatbot.core.event import BaseMessageEvent, GroupMessageEvent
+from ncatbot.core.api import NapCatAPIError
 from dataclasses import dataclass, field
 from .config_proxy import ProxiedPluginConfig
 from typing import Optional
@@ -34,6 +35,7 @@ class IllustSource(ProxiedPluginConfig):
 class DailyIllustConfig(ProxiedPluginConfig):
     enable: bool = field(default=False)
     source: IllustSource = field(default_factory=IllustSource)
+    time_str: str = field(default='08:00')
 
 
 @dataclass
@@ -54,6 +56,14 @@ def filter_group_by_config(event: BaseMessageEvent) -> bool:
     if enable_group_filter:
         return int(event.group_id) in filter_groups
     return True
+
+
+def str_size(size_in_bytes):
+    for unit in ['Bytes', 'KiB', 'MiB', 'GiB', 'TiB']:
+        if size_in_bytes < 1024.0:
+            return f"{size_in_bytes:.2f} {unit}"
+        size_in_bytes /= 1024.0
+    return f"{size_in_bytes:.2f} PiB"
 
 
 class UnnamedPixivIntegrate(NcatBotPlugin):
@@ -115,9 +125,9 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
                     return
             else:
                 logger.error(f'每日插画源配置无效: {self.pixiv_config.daily_illust_config.source} 无法启用')
-            self.add_scheduled_task(self.post_daily_illust, 'DailyIllustPost', '08:00',
+            self.add_scheduled_task(self.post_daily_illust, 'DailyIllustPost', self.pixiv_config.daily_illust_config.time_str,
                                     kwargs={'today': datetime.now()})
-            logger.info(f'每日插画定时任务注册完成')
+            logger.info(f'每日插画定时任务注册完成, 时间字符串为 {self.pixiv_config.daily_illust_config.time_str}')
 
         if self.pixiv_config.daily_illust_config.enable:
             await init_daily_illust()
@@ -223,8 +233,14 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         assert len(download_result.success_units) > 0
         single_result: DownloadResult = download_result.success_units[0]
         for file_path in single_result.success_units:
-            send_result = await self.api.send_group_image(event.group_id, str(file_path))
-            logger.info(send_result)
+            file_size = file_path.stat().st_size
+            if file_path.stat().st_size > 1024 ** 2:
+                await event.reply(f'当前文件大小为 {str_size(file_size)}, 可能无法发送')
+            try:
+                await self.api.send_group_image(event.group_id, str(file_path))
+            except NapCatAPIError as napcat_error:
+                logger.exception(f'多半是大文件又传不上了', exc_info=napcat_error)
+                await event.reply(f'框架API抛出错误, 多半又是大文件传不上的问题')
         await event.reply('发送完成')
 
     @filter_registry.filters('group_filter')
