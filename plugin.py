@@ -12,13 +12,15 @@ from pathlib import Path
 from .pixiv_db import PixivDB
 from .pixiv_sqlmodel import DailyIllustSource
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
+from pydantic import TypeAdapter
 
 PLUGIN_NAME = 'UnnamedPixivIntegrate'
 
 logger = get_log(PLUGIN_NAME)
 enable_group_filter = False
 filter_groups = []
+timedelta_adapter = TypeAdapter(timedelta)
 
 
 class IllustSourceType(enum.Enum):
@@ -36,6 +38,7 @@ class DailyIllustConfig(ProxiedPluginConfig):
     enable: bool = field(default=False)
     source: IllustSource = field(default_factory=IllustSource)
     time_str: str = field(default='08:00')
+    expire_str: str = field(default='P7D')  # ISO 8601
 
 
 @dataclass
@@ -109,6 +112,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             if self.pixiv_db is None:
                 db_url = self.workspace / Path('pixiv.db')
                 self.pixiv_db = PixivDB(f'sqlite:///{str(db_url)}')
+            timedelta_adapter.validate_python(self.pixiv_config.daily_illust_config.expire_str)
             # 目前只实现收藏拉取功能
             if self.pixiv_config.daily_illust_config.source.source_type == IllustSourceType.user.value:
                 source_content = self.pixiv_config.daily_illust_config.source.source_content
@@ -146,6 +150,19 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             aviliable_groups = [int(str_group_id) for str_group_id in await self.api.get_group_list()]
         return aviliable_groups
 
+    async def fetch_illust(self, work_id: int) -> list[Path]:
+        work_detail = await self.pixiv_api.get_work_details(work_id=work_id)
+        if work_detail is None:
+            logger.warning(f'获取插画详情失败, 可能不存在')
+            return []
+        work_result = await self.pixiv_api.download(work_ids=[work_detail])
+        if work_result.total != len(work_result.success_units):
+            logger.warning(f'插画下载失败')
+            return []
+        single_result = work_result.success_units[0]
+        assert isinstance(single_result, DownloadResult)
+        return [illust for illust in single_result.success_units]
+
     async def update_daily_illust_source(self):
         logger.info(f'开始更新每日插画源')
         logger.info(f'从 {self.pixiv_config.daily_illust_config.source} 拉取每日插画')
@@ -165,23 +182,14 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
 
     async def get_daily_illust(self) -> Optional[tuple[int, Path]]:
         logger.debug(f'请求提取每日插画')
-        db_result = self.pixiv_db.get_random_daily_illust()
+        db_result = self.pixiv_db.get_random_daily_illust(expire_time=datetime.now() - timedelta_adapter.validate_python(self.pixiv_config.daily_illust_config.expire_str))
         if db_result is None:
             logger.warning(f'无法获取到任何有效插画源')
             return None
         logger.info(f'获取到随机插画id: {db_result.work_id} 开始拉取')
-        work_detail = await self.pixiv_api.get_work_details(work_id=db_result.work_id)
-        if work_detail is None:
-            logger.warning(f'获取插画详情失败, 可能不存在')
-            return None
-        work_result = await self.pixiv_api.download(work_ids=[work_detail])
-        if work_result.total != len(work_result.success_units):
-            logger.warning(f'插画下载失败')
-            return None
-        single_result = work_result.success_units[0]
-        assert isinstance(single_result, DownloadResult)
-        file_path: Path = random.choice(single_result.success_units)
-        return single_result.task_id, file_path
+        illust_paths = await self.fetch_illust(db_result.work_id)
+        file_path: Path = random.choice(illust_paths)
+        return db_result.work_id, file_path
 
     async def post_daily_illust(self, today: datetime):
         logger.info(f'开始推送每日插画')
