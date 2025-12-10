@@ -112,7 +112,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             if self.pixiv_db is None:
                 db_url = self.workspace / Path('pixiv.db')
                 self.pixiv_db = PixivDB(f'sqlite:///{str(db_url)}')
-            timedelta_adapter.validate_python(self.pixiv_config.daily_illust_config.expire_str)
+            logger.info(f'当前插画过期时间: {timedelta_adapter.validate_python(self.pixiv_config.daily_illust_config.expire_str)}')
             # 目前只实现收藏拉取功能
             if self.pixiv_config.daily_illust_config.source.source_type == IllustSourceType.user.value:
                 source_content = self.pixiv_config.daily_illust_config.source.source_content
