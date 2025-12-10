@@ -215,7 +215,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
 
     async def send_group_image_with_validate(self, group_id: int, file_path: Path):
         file_size = file_path.stat().st_size
-        if file_path.stat().st_size > 1024 ** 2:
+        if file_path.stat().st_size > 1024 ** 2 * 10:
             await self.api.send_group_text(group_id, f'当前文件大小为 {str_size(file_size)}, 可能无法发送')
         try:
             await self.api.send_group_image(group_id, str(file_path))
