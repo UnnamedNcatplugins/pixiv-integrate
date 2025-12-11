@@ -310,7 +310,11 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         single_result: DownloadResult = download_result.success_units[0]
         for file_path in single_result.success_units:
             await self.send_group_image_with_validate(int(event.group_id), file_path)
-        await event.reply('发送完成')
+
+        def plain_tags(tags: list[Tag]):
+            return [tag.name for tag in tags]
+        await event.reply(
+            f'\n{work_details.title=}\n{work_details.create_date=}\n{work_details.user.name=}\n{work_details.user.id=}\n{plain_tags(work_details.tags)=}')
 
     @filter_registry.filters('group_filter')
     @command_registry.command('pixiv_info', aliases=['pi'], description='根据id获取对应illust info')

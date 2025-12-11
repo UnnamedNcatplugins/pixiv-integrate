@@ -175,6 +175,7 @@ class ClientWrapper:
 class BetterPixiv:
     def __init__(self, proxy=None,
                  refresh_token: Optional[str] = None,
+                 storge_path: Path = None,
                  bypass=False,
                  logger: Optional[logging.Logger] = None,
                  debug=False):
@@ -184,7 +185,7 @@ class BetterPixiv:
         self.access_token: Optional[str] = None
         self.proxy = proxy
         self.bypass = bypass
-        self.storge_path: Path = Path(os.path.curdir)
+        self.storge_path: Path = Path(os.path.curdir) if storge_path is None else storge_path
         if not logger:
             try:
                 from .setup_logger import get_logger
