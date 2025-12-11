@@ -292,8 +292,8 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         try:
             await self.api.send_group_image(group_id, str(file_path))
         except NapCatAPIError as napcat_error:
-            logger.exception(f'多半是大文件又传不上了', exc_info=napcat_error)
-            await self.api.send_group_text(group_id, f'框架API抛出错误, 多半又是大文件传不上的问题')
+            logger.exception(f'风控或是大文件又传不上了', exc_info=napcat_error)
+            await self.api.send_group_text(group_id, f'框架API抛出错误, 风控或是大文件又传不上了')
 
     @filter_registry.filters('group_filter')
     @command_registry.command('pixiv', aliases=['p'], description='根据id获取对应illust')
@@ -315,6 +315,11 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             if len(work_details.meta_pages) > self.pixiv_config.max_single_work_cnt:
                 await event.reply(f'超过单个作品数量限制({self.pixiv_config.max_single_work_cnt}),不下载')
                 return
+
+        def plain_tags(tags: list[Tag]):
+            return [tag.name for tag in tags]
+        if 'R-18' in plain_tags(work_details.tags):
+            await event.reply(f'作品含有R18tag, 可能会被风控')
         download_result = await self.pixiv_api.download([work_details])
         if download_result.total != len(download_result.success_units):
             logger.error(f'{download_result}下载失败')
@@ -326,8 +331,6 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         for file_path in single_result.success_units:
             await self.send_group_image_with_validate(int(event.group_id), file_path)
 
-        def plain_tags(tags: list[Tag]):
-            return [tag.name for tag in tags]
         await event.reply(
             f'\n{work_details.title=}\n{work_details.create_date=}\n{work_details.user.name=}\n{work_details.user.id=}\n{plain_tags(work_details.tags)=}')
 
