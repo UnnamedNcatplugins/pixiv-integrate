@@ -233,23 +233,21 @@ class BetterPixiv:
                                      url: str,
                                      file_downloaded_callback: Optional[Callable[[str, bool], None]] = None) -> Path:
         async with sem:
+            filename = Path(url.split('/')[-1])
+            file_path = self.storge_path / filename
             for retry_times in range(10):
                 try:
-                    filename = Path(url.split('/')[-1])
-                    file_path = self.storge_path / filename
                     file_result = True
                     if not file_path.exists():
                         file_result = await api.download(url, path=str(self.storge_path))
                     if file_downloaded_callback:
                         file_downloaded_callback(url, file_result)
-                    break
+                    return file_path
                 except Exception as dl_e:
-                    # 使用 tqdm.write 防止打断进度条
                     self.logger.warning(f'下载{os.path.basename(url)} 异常: {dl_e}, 重试第{retry_times}次')
                     await asyncio.sleep(1)
             else:
                 raise PixivError(f"Download failed after retries: {url}")
-            return Path(self.storge_path) / Path(os.path.basename(url))
 
     async def __download_single_work(self,
                                      api: AppPixivAPI,
