@@ -46,6 +46,7 @@ class DailyIllustConfig(ProxiedPluginConfig):
 class UpdateCheckerConfig(ProxiedPluginConfig):
     enable: bool = field(default=False)
     update_delta: str = field(default='1d')
+    once_post_max: int = field(default=5)
     target_users: dict[int, Optional[int]] = field(default_factory=dict)
 
 
@@ -159,11 +160,21 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         async def init_update_checker():
             logger.info(f'初始化更新检测')
             authors_dict = self.pixiv_config.update_checker_config.target_users
-            for author, id_anchor in authors_dict:
+            for author, id_anchor in authors_dict.items():
                 logger.info(f'注册作者id: {author}')
                 if id_anchor is None:
                     logger.info(f'未设置id锚点, 获取最新作品id中')
-            logger.info(f'更新检测初始化完成')
+                    work_details = await self.pixiv_api.get_user_works(author, max_page_cnt=1)
+                    if not work_details:
+                        logger.warning(f'作者{author}没有作品')
+                        continue
+                    authors_dict[author] = work_details[0].id
+                    logger.info(f'作者{author} id锚点为 {authors_dict[author]}')
+            self.add_scheduled_task(job_func=self.post_new_works,
+                                    name='UpdateChecker',
+                                    interval=self.pixiv_config.update_checker_config.update_delta,
+                                    kwargs={'today': datetime.now()})
+            logger.info(f'更新检测定时任务注册完成, 时间字符串为 {self.pixiv_config.update_checker_config.update_delta}')
 
         if self.pixiv_config.update_checker_config.enable:
             await init_update_checker()
@@ -201,6 +212,38 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         assert isinstance(single_result, DownloadResult)
         return [illust for illust in single_result.success_units]
 
+    async def post_new_works(self, today: datetime):
+        logger.info(f'开始获取更新')
+        authors_dict = self.pixiv_config.update_checker_config.target_users
+        for author, id_anchor in authors_dict.items():
+            if id_anchor is None:
+                logger.info(f'作者 {author} 无作品, 跳过')
+                continue
+            new_works = await self.pixiv_api.get_new_works(user_id=author, id_anchor=id_anchor)
+            if not new_works:
+                logger.info(f'作者 {author} 未更新')
+                continue
+            logger.info(f'作者 {author} 更新了 {len(new_works)} 份作品')
+            if len(new_works) > self.pixiv_config.update_checker_config.once_post_max:
+                logger.warning(f'超过单次发送限制, 将取最后部分加入此次推送')
+                new_works = new_works[:self.pixiv_config.update_checker_config.once_post_max]
+            results = await self.pixiv_api.download(new_works)
+            if results.total != len(results.success_units):
+                logger.warning(f'部分作品下载失败, 将只推送下载成功部分')
+            if len(results.success_units) == 0:
+                logger.error(f'牛逼, 一个成功的都没有, 下一个')
+                continue
+            groups_to_post = await self.get_aviliable_groups()
+            logger.info(f'将向 {groups_to_post} 推送作品')
+            for group_id in groups_to_post:
+                await self.api.send_group_text(group_id, f'作者 {new_works[0].user.name} 更新了 !')
+            for result in results.success_units:
+                assert isinstance(result, DownloadResult)
+                for sigle_result in result.success_units:
+                    await self.send_group_image_with_validate(groups_to_post, sigle_result)
+            logger.info(f'作者 {author} 推送完成')
+        logger.info(f'全部推送完成')
+
     async def update_daily_illust_source(self):
         logger.info(f'开始更新每日插画源')
         logger.info(f'从 {self.pixiv_config.daily_illust_config.source} 拉取每日插画')
@@ -209,6 +252,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             print(f'\r拉取收藏第{now_page}页', end='')
             sources = [DailyIllustSource(work_id=fav.id, user_id=fav.user.id) for fav in favs]
             self.pixiv_db.insert_daily_illust_source_rows(sources)
+            return True
 
         if self.pixiv_config.daily_illust_config.source.source_type == IllustSourceType.user_favs.value:
             source_content = self.pixiv_config.daily_illust_config.source.source_content
@@ -285,15 +329,18 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         await self.post_daily_illust(datetime.now())
         await event.reply(f'执行完成')
 
-    async def send_group_image_with_validate(self, group_id: int, file_path: Path):
+    async def send_group_image_with_validate(self, group_ids: int | list[int], file_path: Path):
+        if isinstance(group_ids, int):
+            group_ids = [group_ids]
         file_size = file_path.stat().st_size
-        if file_path.stat().st_size > 1024 ** 2 * 10:
-            await self.api.send_group_text(group_id, f'当前文件大小为 {str_size(file_size)}, 可能无法发送')
-        try:
-            await self.api.send_group_image(group_id, str(file_path))
-        except NapCatAPIError as napcat_error:
-            logger.exception(f'风控或是大文件又传不上了', exc_info=napcat_error)
-            await self.api.send_group_text(group_id, f'框架API抛出错误, 风控或是大文件又传不上了')
+        for group_id in group_ids:
+            if file_path.stat().st_size > 1024 ** 2 * 10:
+                await self.api.send_group_text(group_id, f'当前文件大小为 {str_size(file_size)}, 可能无法发送')
+            try:
+                await self.api.send_group_image(group_id, str(file_path))
+            except NapCatAPIError as napcat_error:
+                logger.exception(f'风控或是大文件又传不上了', exc_info=napcat_error)
+                await self.api.send_group_text(group_id, f'框架API抛出错误, 风控或是大文件又传不上了')
 
     @filter_registry.filters('group_filter')
     @command_registry.command('pixiv', aliases=['p'], description='根据id获取对应illust')

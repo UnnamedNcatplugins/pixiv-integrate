@@ -150,6 +150,8 @@ class ClientWrapper:
         self.bypass: bool = pixiv.bypass
 
     async def __aenter__(self):
+        if self.pixiv.api:
+            return self.pixiv.api
         self.client = PixivClient(proxy=self.proxy, bypass=self.bypass)
         aapi = AppPixivAPI(client=self.client.start())
         if self.access_token is None:
@@ -166,9 +168,11 @@ class ClientWrapper:
         else:
             self.pixiv.logger.debug(f'获取到上层BetterPixiv实例的at: {self.access_token}')
             aapi.set_auth(refresh_token=self.refresh_token, access_token=self.access_token)
+        self.pixiv.api = self
         return aapi
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self.pixiv.api = None
         await self.client.close()
 
 
@@ -186,6 +190,7 @@ class BetterPixiv:
         self.proxy = proxy
         self.bypass = bypass
         self.storge_path: Path = Path(os.path.curdir) if storge_path is None else storge_path
+        self.api: Optional[ClientWrapper] = None
         if not logger:
             try:
                 from .setup_logger import get_logger
@@ -386,7 +391,7 @@ class BetterPixiv:
     @retry_on_error
     async def get_user_works(self, user_id: int,
                              max_page_cnt: int = 0,
-                             hook_func: Optional[Callable[[list[WorkDetail], int], Awaitable]] = None) -> list:
+                             hook_func: Optional[Callable[[list[WorkDetail], int], Awaitable[bool]]] = None) -> list:
         user_work_list: list[WorkDetail] = []
         now_page = 1
         work_offset: Optional[int] = None
@@ -394,17 +399,20 @@ class BetterPixiv:
             async with ClientWrapper(self) as api:
                 while True:
                     works: dict = await api.user_illusts(user_id, offset=work_offset)
+                    is_continue = True
+                    segment_works = [build_work_detail(fav_work) for fav_work in works['illusts']]
+                    user_work_list += segment_works
+                    if hook_func:
+                        is_continue = await hook_func(segment_works, now_page)
+                    if not is_continue:
+                        raise KeyError
                     next_url: str = works['next_url']
                     if not next_url:
                         return user_work_list
                     index = next_url.find('offset=') + len('offset=')
                     work_offset = int(next_url[index:])
                     self.logger.debug(f'作品翻页中, {next_url=}')
-                    segment_works = [build_work_detail(fav_work) for fav_work in works['illusts']]
-                    user_work_list += segment_works
                     await asyncio.sleep(0.5)
-                    if hook_func:
-                        await hook_func(segment_works, now_page)
                     if max_page_cnt:
                         if now_page >= max_page_cnt:
                             raise KeyError
@@ -415,7 +423,7 @@ class BetterPixiv:
     @retry_on_error
     async def get_favs(self, user_id: int,
                        max_page_cnt: int = 0,
-                       hook_func: Optional[Callable[[list[WorkDetail], int], Awaitable]] = None) -> list[WorkDetail]:
+                       hook_func: Optional[Callable[[list[WorkDetail], int], Awaitable[bool]]] = None) -> list[WorkDetail]:
         fav_list: list[WorkDetail] = []
         now_page = 1
         max_mark = None
@@ -423,18 +431,20 @@ class BetterPixiv:
             async with ClientWrapper(self) as api:
                 while True:
                     favs: dict = await api.user_bookmarks_illust(user_id, max_bookmark_id=int(max_mark) if max_mark else None)
+                    segment_favs = [build_work_detail(fav_work) for fav_work in favs['illusts']]
+                    fav_list += segment_favs
+                    await asyncio.sleep(0.5)
+                    is_continue = True
+                    if hook_func:
+                        is_continue = await hook_func(segment_favs, now_page)
+                    if not is_continue:
+                        raise KeyError
                     next_url: str = favs['next_url']
                     if not next_url:
                         return fav_list
                     self.logger.debug(f'收藏翻页中, {next_url=}')
                     index = next_url.find('max_bookmark_id=') + len('max_bookmark_id=')
                     max_mark = next_url[index:]
-                    # fav_list += [work['id'] for work in favs['illusts']]
-                    segment_favs = [build_work_detail(fav_work) for fav_work in favs['illusts']]
-                    fav_list += segment_favs
-                    await asyncio.sleep(0.5)
-                    if hook_func:
-                        await hook_func(segment_favs, now_page)
                     if max_page_cnt:
                         if now_page >= max_page_cnt:
                             raise KeyError
@@ -443,13 +453,18 @@ class BetterPixiv:
             return fav_list
 
     @retry_on_error
-    async def get_new_works(self):
-        async with ClientWrapper(self) as api:
-            work_list: dict = await api.illust_follow()
-            try:
-                return [work['id'] for work in work_list['illusts']]
-            except KeyError:
-                return [work_list]
+    async def get_new_works(self, user_id: int, id_anchor: int) -> list[WorkDetail]:
+        new_works: list[WorkDetail] = []
+
+        async def work_hook(work_details: list[WorkDetail], page: int):
+            for work_detail in work_details:
+                if work_detail.id > id_anchor:
+                    new_works.append(work_detail)
+                else:
+                    return False
+            return True
+        await self.get_user_works(user_id, hook_func=work_hook)
+        return new_works
 
     @retry_on_error
     async def get_ranking(self, tag_filter='day_male'):
