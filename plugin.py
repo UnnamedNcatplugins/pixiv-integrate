@@ -108,6 +108,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         if self.pixiv_config.proxy_server:
             logger.info(f'检测到代理服务器: {self.pixiv_config.proxy_server}')
         self.pixiv_api = BetterPixiv(proxy=self.pixiv_config.proxy_server if self.pixiv_config.proxy_server else None,
+                                     storge_path=self.workspace,
                                      refresh_token=self.pixiv_config.refresh_token,
                                      logger=get_log('pixiv'))
 
