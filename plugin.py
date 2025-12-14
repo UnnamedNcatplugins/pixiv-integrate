@@ -227,6 +227,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             if len(new_works) > self.pixiv_config.update_checker_config.once_post_max:
                 logger.warning(f'超过单次发送限制, 将取最后部分加入此次推送')
                 new_works = new_works[:self.pixiv_config.update_checker_config.once_post_max]
+            self.pixiv_config.update_checker_config.target_users[author] = new_works[0].id
             results = await self.pixiv_api.download(new_works)
             if results.total != len(results.success_units):
                 logger.warning(f'部分作品下载失败, 将只推送下载成功部分')
