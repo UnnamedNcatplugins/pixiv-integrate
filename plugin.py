@@ -344,8 +344,8 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             group_ids = [group_ids]
         if not file_path.exists():
             raise FileNotFoundError('待发送的图片文件不存在')
-        if file_path.is_file():
-            raise ValueError('不能发送目录')
+        if not file_path.is_file():
+            raise ValueError(f'不能发送文件以外类型: {file_path.stat()}')
         docker_mode = False
         if os.getenv('QQBOT_DOCKER'):
             docker_mode = True
