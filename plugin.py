@@ -1,5 +1,7 @@
 import enum
 import os
+import shutil
+
 from ncatbot.plugin_system import NcatBotPlugin, command_registry, param, admin_filter, on_notice
 from ncatbot.plugin_system.event import NcatBotEvent
 from ncatbot.plugin_system.builtin_plugin.unified_registry.filter_system import filter_registry
@@ -7,6 +9,9 @@ from ncatbot.utils import get_log
 from ncatbot.core.event import BaseMessageEvent, GroupMessageEvent, NoticeEvent
 from ncatbot.core.api import NapCatAPIError
 from dataclasses import dataclass, field
+
+from pydantic.v1.networks import host_regex
+
 from .config_proxy import ProxiedPluginConfig
 from typing import Optional
 from .better_pixiv import BetterPixiv, Tag, DownloadResult, WorkDetail
@@ -341,15 +346,67 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
     async def send_group_image_with_validate(self, group_ids: int | list[int], file_path: Path):
         if isinstance(group_ids, int):
             group_ids = [group_ids]
+        if not file_path.exists():
+            raise FileNotFoundError('待发送的图片文件不存在')
+        if file_path.is_file():
+            raise ValueError('不能发送目录')
+        docker_mode = False
+        if os.getenv('QQBOT_DOCKER'):
+            docker_mode = True
+
+        if docker_mode:
+            logger.debug(f'检测到docker模式环境变量已设置')
+            host_mount_point = Path('/home/mirui/qqbot-napcat/napcat_data').resolve()
+            docker_mount_point = Path('/app/napcat_data').resolve()
+            abs_file_path = file_path.resolve()
+            # 场景 1: 文件原本就在挂载目录内 -> 直接进行路径重映射
+            if abs_file_path.is_relative_to(host_mount_point):
+                relative_path = abs_file_path.relative_to(host_mount_point)
+                final_path_str = str(docker_mount_point / relative_path)
+            # 场景 2: 文件在外部 -> 需要“注入”到挂载目录
+            else:
+                import uuid
+                # 改进 1: 使用 UUID 避免文件名冲突
+                # 保留后缀名以便接收端识别文件类型
+                safe_filename = f"{uuid.uuid4().hex}{abs_file_path.suffix}"
+                host_final_path = host_mount_point / "temp_transfer" / safe_filename
+                # 确保临时子目录存在
+                host_final_path.parent.mkdir(parents=True, exist_ok=True)
+                # 尝试注入文件
+                try:
+                    # 改进 2: 硬链接前检查权限风险
+                    # 如果源文件并非所有用户可读，且我们无法预知容器内 UID，硬链接风险极大
+                    # 这里做一个简单的位运算检查：如果 Other 有 Read 权限 (0o004)，则尝试硬链接
+                    if abs_file_path.stat().st_mode & 0o004:
+                        os.link(abs_file_path, host_final_path)
+                        logger.debug(f'硬链接创建成功: {safe_filename}')
+                    else:
+                        raise PermissionError("Source file not world-readable, falling back to copy")
+                except (OSError, PermissionError) as e:
+                    logger.warning(f'硬链接策略失效 ({e}), 回退到复制模式')
+                    # 改进 3: 使用 copy 而非 copy2
+                    # copy2 会保留元数据(包括权限)，copy 仅复制内容
+                    # 复制后新文件通常会继承目录的 default ACL 或 umask，更适合容器读取
+                    shutil.copy(abs_file_path, host_final_path)
+                    # 显式兜底：赋予 Docker 友好的权限 (644)
+                    host_final_path.chmod(0o644)
+                # 计算 Docker 内部路径
+                # 注意：这里需要加上 "temp_transfer" 子目录
+                docker_final_path = docker_mount_point / "temp_transfer" / safe_filename
+                final_path_str = str(docker_final_path)
+            final_path_str = f'file://{final_path_str}'
+        else:
+            final_path_str = str(file_path)
+
         file_size = file_path.stat().st_size
         for group_id in group_ids:
-            if file_path.stat().st_size > 1024 ** 2 * 10:
+            if file_path.stat().st_size > 1024 ** 2 * 10 and not docker_mode:
                 await self.api.send_group_text(group_id, f'当前文件大小为 {str_size(file_size)}, 可能无法发送')
             try:
-                await self.api.send_group_image(group_id, str(file_path))
+                await self.api.send_group_image(group_id, final_path_str)
             except NapCatAPIError as napcat_error:
-                logger.exception(f'风控或是大文件又传不上了', exc_info=napcat_error)
-                await self.api.send_group_text(group_id, f'框架API抛出错误, 风控或是大文件又传不上了')
+                logger.exception(f'风控了', exc_info=napcat_error)
+                await self.api.send_group_text(group_id, f'框架API抛出错误, 风控了')
 
     @filter_registry.filters('group_filter')
     @command_registry.command('pixiv', aliases=['p'], description='根据id获取对应illust')
