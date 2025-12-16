@@ -390,7 +390,6 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
                 # 注意：这里需要加上 "temp_transfer" 子目录
                 docker_final_path = docker_mount_point / "temp_transfer" / safe_filename
                 final_path_str = str(docker_final_path)
-            final_path_str = f'file://{final_path_str}'
         else:
             final_path_str = str(file_path)
 
