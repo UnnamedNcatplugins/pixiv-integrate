@@ -453,6 +453,8 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             await event.reply(f'未输入作品id,重试')
             return
         work_details = await self.pixiv_api.get_work_details(work_id)
+        if work_details is None:
+            await event.reply(f'无法获取到作品详情, 可能是作品不存在')
 
         def plain_tags(tags: list[Tag]):
             return [tag.name for tag in tags]
