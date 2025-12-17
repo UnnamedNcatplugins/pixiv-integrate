@@ -62,7 +62,10 @@ class PixivConfig(ProxiedPluginConfig):
     update_checker_config: UpdateCheckerConfig = field(default_factory=UpdateCheckerConfig)
 
 
-@filter_registry.register('group_filter')
+GROUP_FILTER_NAME = '__unnamed_pixiv_group_filter__'
+
+
+@filter_registry.register(GROUP_FILTER_NAME)
 def filter_group_by_config(event: BaseMessageEvent) -> bool:
     if not event.is_group_event():
         return False
@@ -324,7 +327,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         logger.info(f'每日插画推送完成')
 
     @admin_filter
-    @filter_registry.filters('group_filter')
+    @filter_registry.filters(GROUP_FILTER_NAME)
     @command_registry.command('test_pdi')
     async def test_post_daily_illust(self, event: GroupMessageEvent):
         await event.reply(f'手动测试每日涩图推送')
@@ -332,7 +335,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         await event.reply(f'执行完成')
 
     @admin_filter
-    @filter_registry.filters('group_filter')
+    @filter_registry.filters(GROUP_FILTER_NAME)
     @command_registry.command('test_uc')
     async def test_update_check(self, event: GroupMessageEvent):
         await event.reply(f'手动测试更新检查')
@@ -403,7 +406,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
                 logger.exception(f'风控了', exc_info=napcat_error)
                 await self.api.send_group_text(group_id, f'框架API抛出错误, 风控了')
 
-    @filter_registry.filters('group_filter')
+    @filter_registry.filters(GROUP_FILTER_NAME)
     @command_registry.command('pixiv', aliases=['p'], description='根据id获取对应illust')
     @param(name='work_id', help='作品id', default=-1)
     async def get_illust_work(self, event: GroupMessageEvent, work_id: int = -1):
@@ -442,7 +445,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
         await event.reply(
             f'\n{work_details.title=}\n{work_details.create_date=}\n{work_details.user.name=}\n{work_details.user.id=}\n{plain_tags(work_details.tags)=}')
 
-    @filter_registry.filters('group_filter')
+    @filter_registry.filters(GROUP_FILTER_NAME)
     @command_registry.command('pixiv_info', aliases=['pi'], description='根据id获取对应illust info')
     @param(name='work_id', help='作品id', default=-1)
     async def get_illust_info(self, event: GroupMessageEvent, work_id: int = -1):
@@ -463,7 +466,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
             f'\n{work_details.title=}\n{work_details.create_date=}\n{work_details.user.name=}\n{work_details.user.id=}\n{plain_tags(work_details.tags)=}')
 
     @admin_filter
-    @filter_registry.filters('group_filter')
+    @filter_registry.filters(GROUP_FILTER_NAME)
     @command_registry.command('update_illust_source', aliases=['uis'])
     async def request_update_daliy_illust(self, event: GroupMessageEvent):
         if not self.init:
