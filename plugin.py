@@ -355,7 +355,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
 
         if docker_mode:
             logger.debug(f'检测到docker模式环境变量已设置')
-            host_mount_point = Path('/home/mirui/qqbot-napcat/napcat_data').resolve()
+            host_mount_point = Path('~/qqbot-napcat/napcat_data').resolve()
             docker_mount_point = Path('/app/napcat_data').resolve()
             abs_file_path = file_path.resolve()
             # 场景 1: 文件原本就在挂载目录内 -> 直接进行路径重映射
@@ -364,11 +364,8 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
                 final_path_str = str(docker_mount_point / relative_path)
             # 场景 2: 文件在外部 -> 需要“注入”到挂载目录
             else:
-                import uuid
-                # 改进 1: 使用 UUID 避免文件名冲突
-                # 保留后缀名以便接收端识别文件类型
-                safe_filename = f"{uuid.uuid4().hex}{abs_file_path.suffix}"
-                host_final_path = host_mount_point / "temp_transfer" / safe_filename
+                safe_filename = abs_file_path.name
+                host_final_path = host_mount_point / safe_filename
                 # 确保临时子目录存在
                 host_final_path.parent.mkdir(parents=True, exist_ok=True)
                 # 尝试注入文件
