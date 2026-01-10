@@ -388,7 +388,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
                     host_final_path.chmod(0o644)
                 # 计算 Docker 内部路径
                 # 注意：这里需要加上 "temp_transfer" 子目录
-                docker_final_path = docker_mount_point / "temp_transfer" / safe_filename
+                docker_final_path = docker_mount_point / safe_filename
                 final_path_str = str(docker_final_path)
         else:
             final_path_str = str(file_path)
