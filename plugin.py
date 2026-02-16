@@ -355,7 +355,7 @@ class UnnamedPixivIntegrate(NcatBotPlugin):
 
         if docker_mode:
             logger.debug(f'检测到docker模式环境变量已设置')
-            host_mount_point = (Path(__file__).parent.parent / 'napcat_data').resolve()
+            host_mount_point = (Path(__file__).parent.parent.parent / 'napcat_data').resolve()
             docker_mount_point = Path('/app/napcat_data').resolve()
             abs_file_path = file_path.resolve()
             # 场景 1: 文件原本就在挂载目录内 -> 直接进行路径重映射
